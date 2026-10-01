@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenRouter MAI adapter. Private files, timestamped words, no third-party Python packages."""
+"""OpenRouter transcription adapter. Private files, timestamped words, no third-party Python packages."""
 import argparse
 import base64
 import hashlib
@@ -41,6 +41,49 @@ def configuration():
     return config
 
 
+def options(config):
+    model = config.get('model', MODEL)
+    if not isinstance(model, str) or not model.strip() or any(c.isspace() for c in model):
+        raise ValueError('openrouter.model must be a non-empty model ID without whitespace')
+    audio_format = config.get('audio_format', 'mp3')
+    if audio_format not in ('mp3', 'wav', 'flac'):
+        raise ValueError('openrouter.audio_format must be mp3, wav or flac')
+    chunk = config.get('chunk_seconds', CHUNK_SECONDS)
+    if type(chunk) is not int or not 1 <= chunk <= 3600:
+        raise ValueError('openrouter.chunk_seconds must be an integer from 1 to 3600')
+    raw = config.get('provider_options', '{}')
+    if not isinstance(raw, str):
+        raise ValueError('openrouter.provider_options must be a JSON string containing an object')
+    try:
+        provider = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    except ValueError:
+        raise ValueError('openrouter.provider_options must contain valid JSON') from None
+    try:
+        json.dumps(provider, allow_nan=False)
+    except ValueError:
+        raise ValueError('openrouter.provider_options must contain finite JSON values') from None
+    if not isinstance(provider, dict):
+        raise ValueError('openrouter.provider_options must contain a JSON object')
+    if 'phrases' in config:
+        raise ValueError('Replace openrouter.phrases with provider_options; see docs/openrouter.md')
+    return {'model': model, 'audio_format': audio_format, 'chunk_seconds': chunk,
+            'provider_options': provider}
+
+
+def encode(source, target, offset, length, audio_format):
+    codecs = {'mp3': ['-c:a', 'libmp3lame', '-b:a', '64k'],
+              'wav': ['-c:a', 'pcm_s16le'], 'flac': ['-c:a', 'flac']}
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'f32le', '-ar', str(RATE),
+                    '-ac', '1', '-ss', str(offset), '-i', str(source), '-t', str(length),
+                    *codecs[audio_format], str(target)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def cache_key(audio, language, settings):
+    return hashlib.sha256(audio + json.dumps([settings, language, 'v2'],
+                                             sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
 def credential():
     key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not key:
@@ -61,28 +104,28 @@ def credential():
 def normalize(response, duration):
     """Reject text without real word times: guessed times break the player and speakers."""
     if not isinstance(response, dict) or not isinstance(response.get('text'), str):
-        raise ValueError('MAI returned no transcript text')
+        raise ValueError('OpenRouter returned no transcript text')
     raw = response.get('words', [])
     if not isinstance(raw, list):
-        raise ValueError('MAI returned invalid word timestamps')
+        raise ValueError('OpenRouter returned invalid word timestamps')
     words = []
     previous = -1.0
     for word in raw:
         if not isinstance(word, dict):
-            raise ValueError('MAI returned an invalid word')
+            raise ValueError('OpenRouter returned an invalid word')
         text = word.get('word', word.get('text'))
         start, end = word.get('start'), word.get('end')
         if (not isinstance(text, str) or not isinstance(start, (float, int))
                 or not isinstance(end, (float, int)) or isinstance(start, bool) or isinstance(end, bool)
                 or not math.isfinite(start) or not math.isfinite(end)
                 or start < 0 or end < start or start < previous or end > duration + 1):
-            raise ValueError('MAI returned invalid word timestamps')
+            raise ValueError('OpenRouter returned invalid word timestamps')
         previous = start
         if text.strip():
             words.append({'text': text.strip(), 'start_ms': round(min(start, duration) * 1000),
                           'end_ms': round(min(end, duration) * 1000)})
     if response['text'].strip() and not words:
-        raise ValueError('MAI returned text without word timestamps; retry the transcription')
+        raise ValueError('Selected OpenRouter model/provider returned no word timestamps; choose one supporting verbose_json and word timestamps')
     language = response.get('language')
     if not isinstance(language, str):
         languages = response.get('languages', [])
@@ -90,13 +133,12 @@ def normalize(response, duration):
     return {'words': words, 'language': language}
 
 
-def request(audio, language, phrases, key):
-    options = {'diarization': {'enabled': False}}
-    if phrases:
-        options['phraseList'] = {'phrases': phrases}
-    payload = {'model': MODEL, 'input_audio': {'data': base64.b64encode(audio).decode(), 'format': 'mp3'},
-               'response_format': 'verbose_json', 'timestamp_granularities': ['word', 'segment'],
-               'provider': {'options': {'azure': options}}}
+def request(audio, language, settings, key):
+    payload = {'model': settings['model'],
+               'input_audio': {'data': base64.b64encode(audio).decode(), 'format': settings['audio_format']},
+               'response_format': 'verbose_json', 'timestamp_granularities': ['word', 'segment']}
+    if settings['provider_options']:
+        payload['provider'] = {'options': settings['provider_options']}
     if language != 'auto':
         payload['language'] = language
     body = json.dumps(payload).encode()
@@ -116,32 +158,27 @@ def request(audio, language, phrases, key):
 
 
 def transcribe(args):
-    config = configuration()
-    phrases = config.get('phrases', [])
-    if not isinstance(phrases, list) or not all(isinstance(p, str) for p in phrases):
-        raise ValueError('openrouter.phrases must be a list of strings')
+    settings = options(configuration())
+    chunk_seconds = settings['chunk_seconds']
     key = credential()
     size = args.input.stat().st_size
     if size % 4:
         raise ValueError('Invalid f32 audio')
     duration = size / (RATE * 4)
-    count = max(1, math.ceil(duration / CHUNK_SECONDS))
+    count = max(1, math.ceil(duration / chunk_seconds))
     cache_root = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'omarchy-meeting-recorder/mai-responses'
     cache_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     words = []
     detected = None
     with tempfile.TemporaryDirectory(prefix='upload-', dir=args.output.parent) as temporary:
         for index in range(count):
-            offset = index * CHUNK_SECONDS
-            length = min(CHUNK_SECONDS, duration - offset)
-            atomic_json(args.progress, {'progress': index / count, 'stage': f'MAI: transcribing part {index + 1} of {count}'})
-            audio = Path(temporary) / 'audio.mp3'
-            subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'f32le', '-ar', str(RATE),
-                            '-ac', '1', '-ss', str(offset), '-i', str(args.input), '-t', str(length),
-                            '-c:a', 'libmp3lame', '-b:a', '64k', str(audio)],
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            offset = index * chunk_seconds
+            length = min(chunk_seconds, duration - offset)
+            atomic_json(args.progress, {'progress': index / count, 'stage': f'OpenRouter: transcribing part {index + 1} of {count}'})
+            audio = Path(temporary) / ('audio.' + settings['audio_format'])
+            encode(args.input, audio, offset, length, settings['audio_format'])
             encoded = audio.read_bytes()
-            digest = hashlib.sha256(encoded + json.dumps([MODEL, args.language, phrases, 'v1']).encode()).hexdigest()
+            digest = cache_key(encoded, args.language, settings)
             cached = cache_root / (digest + '.json')
             response = None
             if cached.exists():
@@ -152,7 +189,7 @@ def transcribe(args):
                 except (ValueError, OSError, TypeError):
                     pass
             if response is None:
-                response = request(encoded, args.language, phrases, key)
+                response = request(encoded, args.language, settings, key)
                 normalize(response, length)
                 atomic_json(cached, response)
             result = normalize(response, length)
@@ -162,7 +199,7 @@ def transcribe(args):
                 word['end_ms'] += offset * 1000
                 words.append(word)
     atomic_json(args.output, {'words': words, 'language': detected})
-    atomic_json(args.progress, {'progress': 1.0, 'stage': 'MAI transcription ready'})
+    atomic_json(args.progress, {'progress': 1.0, 'stage': 'OpenRouter transcription ready'})
 
 
 def main():
@@ -176,7 +213,7 @@ def main():
     try:
         transcribe(args)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
-        print(str(error) if isinstance(error, ValueError) else 'MAI transcription failed; check network access and ffmpeg', file=sys.stderr)
+        print(str(error) if isinstance(error, ValueError) else 'OpenRouter transcription failed; check network access and ffmpeg', file=sys.stderr)
         return 1
     return 0
 

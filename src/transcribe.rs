@@ -1413,10 +1413,10 @@ fn run_cli(work: impl FnOnce(&Events, &Abort) -> Result<Transcript, String>) -> 
 
 fn usage() -> glib::ExitCode {
     eprintln!(
-        "Usage: {APP_NAME} transcribe <mic> <computer> [--backend whisper|mai] [--language auto|en|no|...] [--model name]"
+        "Usage: {APP_NAME} transcribe <mic> <computer> [--backend whisper|openrouter] [--language auto|en|no|...] [--model name]"
     );
     eprintln!(
-        "       {APP_NAME} transcribe-file <audio> [--speakers N] [--backend whisper|mai] [--language auto|en|no|...] [--model name]"
+        "       {APP_NAME} transcribe-file <audio> [--speakers N] [--backend whisper|openrouter] [--language auto|en|no|...] [--model name]"
     );
     glib::ExitCode::from(2)
 }

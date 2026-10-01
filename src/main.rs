@@ -80,7 +80,7 @@ fn main() -> glib::ExitCode {
             println!("  transcribe    transcribe two tracks and print the transcript as Markdown");
             println!("  transcribe-file  transcribe one audio file [--speakers N]");
             println!(
-                "                Both accept --backend whisper|mai and --language auto|en|no|..."
+                "                Both accept --backend whisper|openrouter and --language auto|en|no|..."
             );
             println!(
                 "  ask           run a prompt over stdin through the default agent, without tools"

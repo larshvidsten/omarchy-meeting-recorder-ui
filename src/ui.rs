@@ -1769,7 +1769,7 @@ impl Recorder {
         if self.model_downloading.get() {
             return;
         }
-        if crate::mai::Backend::configured() == crate::mai::Backend::Mai {
+        if crate::mai::Backend::configured() == crate::mai::Backend::OpenRouter {
             self.model_banner.set_revealed(false);
             return;
         }

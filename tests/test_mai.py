@@ -45,19 +45,49 @@ class MaiTests(unittest.TestCase):
             def __exit__(self,*args):pass
             def read(self):return json.dumps(response()).encode()
         with patch.object(mai.urllib.request, 'urlopen', return_value=Reply()) as call:
-            mai.request(b'audio', 'no', ['Digel'], 'test-key')
+            mai.request(b'audio', 'no', mai.options({'model':'example/stt', 'audio_format':'flac', 'provider_options':json.dumps({'custom':{'vocabulary':['Digel']}})}), 'test-key')
         req = call.call_args.args[0]
         body = json.loads(req.data)
         self.assertEqual(body['language'], 'no')
         self.assertEqual(body['timestamp_granularities'], ['word', 'segment'])
-        self.assertFalse(body['provider']['options']['azure']['diarization']['enabled'])
+        self.assertEqual(body['model'], 'example/stt')
+        self.assertEqual(body['input_audio']['format'], 'flac')
+        self.assertEqual(body['provider']['options'], {'custom':{'vocabulary':['Digel']}})
         self.assertEqual(call.call_args.kwargs['timeout'], 180)
 
     def test_http_error_does_not_leak_body_or_key(self):
         error = urllib.error.HTTPError(mai.ENDPOINT, 401, 'secret', {}, None)
         with patch.object(mai.urllib.request, 'urlopen', side_effect=error):
-            with self.assertRaisesRegex(ValueError, 'HTTP 401') as caught:mai.request(b'audio','auto',[],'secret')
+            with self.assertRaisesRegex(ValueError, 'HTTP 401') as caught:mai.request(b'audio','auto',mai.options({}),'secret')
         self.assertNotIn('secret',str(caught.exception))
+
+    def test_settings_validation_and_cache_identity(self):
+        for config in [{'model':''}, {'model':2}, {'audio_format':'exe'}, {'chunk_seconds':0},
+                       {'chunk_seconds':True}, {'chunk_seconds':3601}, {'chunk_seconds':1.5},
+                       {'provider_options':'[]'}, {'provider_options':'{bad'},
+                       {'provider_options':'{"x":NaN}'}, {'provider_options':{}}, {'phrases':[]}]:
+            with self.subTest(config=config), self.assertRaises(ValueError):mai.options(config)
+        default = mai.options({})
+        self.assertEqual(default['model'], mai.MODEL)
+        key = mai.cache_key(b'audio', 'no', default)
+        for name, value in [('model','other/stt'), ('audio_format','wav'), ('chunk_seconds',30),
+                            ('provider_options',{'custom':{'words':['name']}})]:
+            settings = dict(default); settings[name] = value
+            self.assertNotEqual(key, mai.cache_key(b'audio', 'no', settings))
+
+    def test_actual_audio_formats(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); source = root/'audio.f32'
+            source.write_bytes(b'\0' * (16000*4))
+            for fmt, codec in [('mp3','mp3'), ('wav','pcm_s16le'), ('flac','flac')]:
+                target = root/('audio.'+fmt)
+                mai.encode(source, target, 0, 1, fmt)
+                probe = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(target)]))
+                stream = probe['streams'][0]
+                self.assertEqual(stream['codec_name'],codec)
+                self.assertEqual(stream['sample_rate'],'16000')
+                self.assertEqual(stream['channels'],1)
 
     def test_chunk_offsets_and_retry_cache(self):
         with tempfile.TemporaryDirectory() as root:

@@ -30,7 +30,8 @@ class InstallTests(unittest.TestCase):
             with patch.object(installer.Path,'home',return_value=home),patch.object(__import__('sys'),'argv',['installer',str(binary)]),patch.object(installer.subprocess,'run'),patch.object(installer.subprocess,'check_output',return_value='abc123\n'),patch.object(installer.datetime,'datetime') as clock:
                 clock.now.return_value.strftime.return_value='second-install'
                 installer.main()
-            self.assertEqual(tomllib.loads(config.read_text())['backend'], 'mai')
+            self.assertEqual(tomllib.loads(config.read_text())['backend'], 'openrouter')
+            self.assertIn('azure', json.loads(tomllib.loads(config.read_text())['openrouter']['provider_options']))
             backups=list((home/'.local/share/meeting-recorder-mai/backups').glob('*/.config/omarchy-meeting-recorder/config.toml'))
             self.assertIn('model = "tiny"\n', [p.read_text() for p in backups])
 

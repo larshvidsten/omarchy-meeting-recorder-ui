@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -39,6 +40,35 @@ def main():
     plugin=home/'.config/omarchy/plugins/jankeesvw.meeting-recorder'
     if plugin.exists() and not plugin.is_symlink():
         raise SystemExit('An existing plugin directory needs to be reconciled before installation: '+str(plugin))
+    if 'phrases' in parsed.get('openrouter', {}) and 'provider_options' in parsed.get('openrouter', {}):
+        raise SystemExit('Both phrases and provider_options exist; reconcile them before installation')
+    if not any(a.get('name')=='Summarize to Tana' for a in parsed.get('action',[])):
+        old+='\n[[action]]\nname = "Summarize to Tana"\ncommand = \'python3 "$HOME/.local/share/meeting-recorder-mai/current/integrations/meeting-to-tana.py" "$1"\'\n'
+    if 'openrouter' not in parsed:
+        old+='\n[openrouter]\n'
+        parsed['openrouter'] = {'phrases': ['Digel']}
+    if 'backend' not in parsed:
+        backend = prefs.get('backend', 'mai')
+        if backend not in ('mai', 'openrouter', 'whisper'): backend = 'whisper'
+        old = f'backend = "{backend}"\n\n' + old
+    old = re.sub(r'(?m)^backend\s*=\s*["\']mai["\']\s*$', 'backend = "openrouter"', old)
+    router = parsed.get('openrouter', {})
+    if 'phrases' in router:
+        if 'provider_options' in router:
+            raise SystemExit('Both phrases and provider_options exist; reconcile them before installation')
+        options = json.dumps({'azure': {'diarization': {'enabled': False}, 'phraseList': {'phrases': router['phrases']}}})
+        lines = old.splitlines(keepends=True)
+        inside = False
+        migrated = []
+        for line in lines:
+            if line.strip().startswith('['): inside = line.strip() == '[openrouter]'
+            if inside and line.lstrip().startswith('phrases'):
+                continue
+            migrated.append(line)
+            if line.strip() == '[openrouter]':
+                migrated.append('provider_options = ' + json.dumps(options) + '\n')
+        old = ''.join(migrated)
+    tomllib.loads(old)
     (release/'bin').mkdir(parents=True)
     shutil.copy2(binary,release/'bin/omarchy-meeting-recorder')
     shutil.copytree(source/'integrations',release/'integrations',ignore=shutil.ignore_patterns('__pycache__'))
@@ -67,15 +97,6 @@ def main():
     mime=home/'.local/share/mime/packages/omarchy-meeting-recorder.xml'
     preserve(mime); mime.parent.mkdir(parents=True,exist_ok=True)
     shutil.copy2(source/'data/omarchy-meeting-recorder.xml',mime)
-    if not any(a.get('name')=='Summarize to Tana' for a in parsed.get('action',[])):
-        old+='\n[[action]]\nname = "Summarize to Tana"\ncommand = \'python3 "$HOME/.local/share/meeting-recorder-mai/current/integrations/meeting-to-tana.py" "$1"\'\n'
-    if 'openrouter' not in parsed:
-        old+='\n[openrouter]\nphrases = ["Digel"]\n'
-    if 'backend' not in parsed:
-        backend = prefs.get('backend', 'mai')
-        if backend not in ('mai', 'whisper'): backend = 'whisper'
-        old = f'backend = "{backend}"\n\n' + old
-    tomllib.loads(old)
     config.parent.mkdir(parents=True,exist_ok=True); config.write_text(old)
     prefs.pop('backend', None)
     prefs.setdefault('language','auto')

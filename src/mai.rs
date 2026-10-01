@@ -15,14 +15,14 @@ pub const MODEL: &str = "microsoft/mai-transcribe-2";
 #[derive(Clone, Copy, PartialEq)]
 pub enum Backend {
     Whisper,
-    Mai,
+    OpenRouter,
 }
 impl Backend {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "whisper" => Ok(Self::Whisper),
-            "mai" => Ok(Self::Mai),
-            _ => Err("backend must be whisper or mai".into()),
+            "openrouter" | "mai" => Ok(Self::OpenRouter),
+            _ => Err("backend must be whisper or openrouter".into()),
         }
     }
     /// A root-level config choice. Cloud transcription is opt-in.
@@ -33,30 +33,30 @@ impl Backend {
     }
 
     fn from_config(text: &str) -> Self {
-        for line in text.lines().map(str::trim) {
-            if line.starts_with('[') {
-                break; // Root options must precede TOML tables.
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if key.trim() == "backend" {
-                let value = value.split('#').next().unwrap_or("").trim();
-                let value = value
-                    .strip_prefix('"')
-                    .and_then(|v| v.strip_suffix('"'))
-                    .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')));
-                return value
+        toml::from_str::<toml::Value>(&text)
+            .ok()
+            .and_then(|config| {
+                config
+                    .get("backend")?
+                    .as_str()
                     .and_then(|v| Self::parse(v).ok())
-                    .unwrap_or(Self::Whisper);
-            }
-        }
-        Self::Whisper
+            })
+            .unwrap_or(Self::Whisper)
     }
 
     pub fn model(self) -> String {
-        if self == Self::Mai {
-            MODEL.into()
+        if self == Self::OpenRouter {
+            std::fs::read_to_string(crate::models::config_file())
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                .and_then(|config| {
+                    config
+                        .get("openrouter")?
+                        .get("model")?
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| MODEL.into())
         } else {
             crate::models::configured()
         }
@@ -126,7 +126,7 @@ pub fn transcribe(
         }
         file.flush().map_err(|e| e.to_string())?;
     }
-    let _ = events.send_blocking(Event::Stage("Sending audio to MAI via OpenRouter".into()));
+    let _ = events.send_blocking(Event::Stage("Sending audio to OpenRouter".into()));
     let mut child = Command::new("python3")
         .arg(helper)
         .arg("--input")
@@ -142,7 +142,7 @@ pub fn transcribe(
         .stderr(File::create(&error).map_err(|e| e.to_string())?)
         .process_group(0)
         .spawn()
-        .map_err(|e| format!("could not start MAI adapter: {e}"))?;
+        .map_err(|e| format!("could not start OpenRouter adapter: {e}"))?;
     let mut last = String::new();
     let success = loop {
         if abort.load(Ordering::Relaxed) {
@@ -182,7 +182,7 @@ pub fn transcribe(
     };
     if !success {
         return Err(fs::read_to_string(error)
-            .unwrap_or_else(|_| "MAI transcription failed".into())
+            .unwrap_or_else(|_| "OpenRouter transcription failed".into())
             .trim()
             .chars()
             .take(1000)
@@ -202,13 +202,17 @@ fn parse_words(
     let mut previous = -1;
     for word in value["words"]
         .as_array()
-        .ok_or("MAI adapter returned no words")?
+        .ok_or("OpenRouter adapter returned no words")?
     {
-        let text = word["text"].as_str().ok_or("invalid MAI word")?;
-        let start = word["start_ms"].as_i64().ok_or("invalid MAI timestamp")?;
-        let end = word["end_ms"].as_i64().ok_or("invalid MAI timestamp")?;
+        let text = word["text"].as_str().ok_or("invalid OpenRouter word")?;
+        let start = word["start_ms"]
+            .as_i64()
+            .ok_or("invalid OpenRouter timestamp")?;
+        let end = word["end_ms"]
+            .as_i64()
+            .ok_or("invalid OpenRouter timestamp")?;
         if start < previous || start < 0 || end < start || end > duration_ms + 1 {
-            return Err("invalid MAI timestamp range".into());
+            return Err("invalid OpenRouter timestamp range".into());
         }
         previous = start;
         if !text.trim().is_empty() {
@@ -238,11 +242,12 @@ mod tests {
             assert!(Backend::from_config(text) == Backend::Whisper);
         }
         for text in [
-            "backend = \"mai\"",
+            "backend = \"openrouter\"",
+            "backend = \"openrouter\"",
             "backend = 'mai' # cloud\n[openrouter]",
             "# comment\nbackend = \"mai\"\n[[action]]",
         ] {
-            assert!(Backend::from_config(text) == Backend::Mai);
+            assert!(Backend::from_config(text) == Backend::OpenRouter);
         }
         assert!(Backend::from_config("backend = \"whisper\"") == Backend::Whisper);
     }
