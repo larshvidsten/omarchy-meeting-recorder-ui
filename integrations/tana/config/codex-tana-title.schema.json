@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["note_title"],"properties":{"note_title":{"type":"string","minLength":1}}}

@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_context",
+    "destination_context",
+    "type_definition"
+  ],
+  "properties": {
+    "event_context": {
+      "type": "string"
+    },
+    "destination_context": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type_definition": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

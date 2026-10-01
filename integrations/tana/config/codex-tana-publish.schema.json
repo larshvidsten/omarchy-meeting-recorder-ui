@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "note_title",
+    "session_uri",
+    "message"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "created",
+        "already_exists"
+      ]
+    },
+    "note_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_uri": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

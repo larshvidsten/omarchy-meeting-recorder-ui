@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "note_title", "session_uri", "message"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["created", "already_exists"]
+    },
+    "note_title": { "type": "string" },
+    "session_uri": { "type": "string" },
+    "message": { "type": "string" }
+  }
+}

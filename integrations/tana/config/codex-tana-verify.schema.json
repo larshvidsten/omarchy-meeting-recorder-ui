@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_uri",
+    "note_title",
+    "observed_text"
+  ],
+  "properties": {
+    "session_uri": {
+      "type": "string",
+      "minLength": 1
+    },
+    "note_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observed_text": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
