@@ -297,6 +297,8 @@ struct Recorder {
     title_row: adw::EntryRow,
     format_row: adw::ComboRow,
     language_row: adw::ComboRow,
+    backend_row: adw::ComboRow,
+    again_backend_row: adw::ComboRow,
     animation: TranscribeAnimation,
     meters: [gtk::DrawingArea; 2],
     compact_meters: [gtk::DrawingArea; 2],
@@ -443,6 +445,18 @@ impl Recorder {
         group.add(&title_row);
         group.add(&format_row);
         group.add(&language_row);
+        let backend_row = adw::ComboRow::builder()
+            .title("Transcription")
+            .subtitle("Whisper stays local; MAI sends audio to OpenRouter")
+            .model(&gtk::StringList::new(&[
+                "Whisper (local)",
+                "MAI (OpenRouter)",
+            ]))
+            .selected(u32::from(
+                settings::load_backend() == crate::mai::Backend::Mai,
+            ))
+            .build();
+        group.add(&backend_row);
         content.append(&group);
 
         let frozen: [Frozen; 2] = Default::default();
@@ -633,6 +647,16 @@ impl Recorder {
             .build();
         again_language_row.add_suffix(&again_button);
         again_group.add(&again_language_row);
+        let again_backend_row = adw::ComboRow::builder()
+            .title("Transcription")
+            .subtitle("MAI sends audio to OpenRouter")
+            .model(&gtk::StringList::new(&[
+                "Whisper (local)",
+                "MAI (OpenRouter)",
+            ]))
+            .selected(backend_row.selected())
+            .build();
+        again_group.add(&again_backend_row);
         left.append(&again_group);
 
         let right = gtk::Box::builder()
@@ -762,6 +786,8 @@ impl Recorder {
             title_row,
             format_row,
             language_row,
+            backend_row,
+            again_backend_row,
             animation,
             meters,
             compact_meters,
@@ -944,6 +970,26 @@ impl Recorder {
         });
 
         // The two language rows (recording page, done page) are one setting.
+        let weak = Rc::downgrade(self);
+        self.backend_row.connect_selected_notify(move |row| {
+            if let Some(r) = weak.upgrade() {
+                if !r.loading.get() {
+                    settings::save_backend(r.selected_backend());
+                }
+                if r.again_backend_row.selected() != row.selected() {
+                    r.again_backend_row.set_selected(row.selected());
+                }
+                r.update_model_banner();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.again_backend_row.connect_selected_notify(move |row| {
+            if let Some(r) = weak.upgrade()
+                && r.backend_row.selected() != row.selected()
+            {
+                r.backend_row.set_selected(row.selected());
+            }
+        });
         let weak = Rc::downgrade(self);
         self.language_row.connect_selected_notify(move |row| {
             if let Some(r) = weak.upgrade() {
@@ -1295,6 +1341,14 @@ impl Recorder {
             .unwrap_or(Format::Mono)
     }
 
+    fn selected_backend(&self) -> crate::mai::Backend {
+        if self.backend_row.selected() == 1 {
+            crate::mai::Backend::Mai
+        } else {
+            crate::mai::Backend::Whisper
+        }
+    }
+
     fn selected_language(&self) -> &'static str {
         LANGUAGES
             .get(self.language_row.selected() as usize)
@@ -1342,6 +1396,10 @@ impl Recorder {
         self.compact_button.set_visible(recording);
         self.compact_action.set_enabled(recording);
         self.language_row
+            .set_sensitive(!matches!(state, State::Stopping | State::Transcribing));
+        self.backend_row
+            .set_sensitive(!matches!(state, State::Stopping | State::Transcribing));
+        self.again_backend_row
             .set_sensitive(!matches!(state, State::Stopping | State::Transcribing));
         self.button.set_sensitive(matches!(
             state,
@@ -1770,6 +1828,10 @@ impl Recorder {
         if self.model_downloading.get() {
             return;
         }
+        if self.selected_backend() == crate::mai::Backend::Mai {
+            self.model_banner.set_revealed(false);
+            return;
+        }
         match crate::models::missing() {
             Some((name, size_mb)) => {
                 let size = if size_mb >= 1000 {
@@ -1828,6 +1890,11 @@ impl Recorder {
 
     /// Back to the recording page, ready for the next meeting.
     fn ready(&self) {
+        self.loading.set(true);
+        self.backend_row.set_selected(u32::from(
+            settings::load_backend() == crate::mai::Backend::Mai,
+        ));
+        self.loading.set(false);
         self.player.unload();
         *self.result_dir.borrow_mut() = None;
         *self.manifest.borrow_mut() = None;
@@ -1980,6 +2047,7 @@ impl Recorder {
         self.animation.set_progress(0.0);
         self.animation.set_running(true);
 
+        let backend = self.selected_backend();
         let abort = Abort::default();
         *self.abort.borrow_mut() = Some(abort.clone());
         let (events_tx, events_rx) = async_channel::unbounded::<Event>();
@@ -1987,7 +2055,9 @@ impl Recorder {
         std::thread::spawn(move || {
             let result = match tracks {
                 Tracks::Single(path, speakers) => transcribe::load_track(&path).and_then(|track| {
-                    transcribe::transcribe_single(&track, language, speakers, &events_tx, &abort)
+                    transcribe::transcribe_single(
+                        backend, &track, language, speakers, &events_tx, &abort,
+                    )
                 }),
                 Tracks::Raw(dir) | Tracks::Kept(dir) => {
                     let (mic_path, computer_path) = if dir.join("mic.raw").exists() {
@@ -1997,7 +2067,9 @@ impl Recorder {
                     };
                     transcribe::load_track(&mic_path).and_then(|mic| {
                         let computer = transcribe::load_track(&computer_path)?;
-                        transcribe::transcribe(&mic, &computer, language, &events_tx, &abort)
+                        transcribe::transcribe(
+                            backend, &mic, &computer, language, &events_tx, &abort,
+                        )
                     })
                 }
             };
@@ -2109,7 +2181,7 @@ impl Recorder {
                 .collect();
             markdown = meeting::relabel_all(&markdown, &renames);
             manifest.language = language.to_owned();
-            manifest.model = Some(crate::models::configured());
+            manifest.model = Some(backend.model());
             manifest.title = self.title();
             // Chapters of a previous transcript would point at lines that are gone.
             manifest.chapters.clear();
@@ -2225,6 +2297,9 @@ impl Recorder {
         }
 
         self.loading.set(true);
+        self.backend_row.set_selected(u32::from(
+            manifest.model.as_deref() == Some(crate::mai::MODEL),
+        ));
         if let Some(i) = Format::ALL.iter().position(|f| *f == manifest.format) {
             self.format_row.set_selected(i as u32);
         }

@@ -9,7 +9,9 @@ arch=('x86_64')
 url="https://github.com/jankeesvw/omarchy-meeting-recorder"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'graphene' 'libgcc' 'libstdc++' 'glibc' 'libpulse' 'ffmpeg' 'vulkan-icd-loader')
-optdepends=('quickshell: the bar widget, part of every Omarchy install'
+optdepends=('python: optional MAI transcription through OpenRouter'
+            'libsecret: optional OpenRouter API key storage (secret-tool)'
+            'quickshell: the bar widget, part of every Omarchy install'
             'perl-file-mimeinfo: open .meeting-recorder files with xdg-open, not only from Nautilus')
 provides=("$_name")
 conflicts=("$_name")

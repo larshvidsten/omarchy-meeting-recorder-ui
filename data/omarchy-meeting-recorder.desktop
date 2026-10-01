@@ -2,7 +2,7 @@
 Version=1.0
 Name=Meeting Recorder
 Keywords=meeting;recorder;record;transcribe;transcript;audio;voice;whisper;
-Comment=Record a meeting in two tracks and transcribe it on this computer
+Comment=Record a meeting in two tracks and transcribe it with local Whisper or optional MAI
 Exec=omarchy-meeting-recorder %f
 Terminal=false
 Type=Application
