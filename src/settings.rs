@@ -84,14 +84,3 @@ pub fn bar_widget_offered() -> bool {
 pub fn set_bar_widget_offered() {
     save("bar_widget_offered", "yes");
 }
-
-/// Cloud upload is opt-in. An unknown or absent value always stays local.
-pub fn load_backend() -> crate::mai::Backend {
-    load()["backend"]
-        .as_str()
-        .and_then(|s| crate::mai::Backend::parse(s).ok())
-        .unwrap_or(crate::mai::Backend::Whisper)
-}
-pub fn save_backend(backend: crate::mai::Backend) {
-    save("backend", backend.key());
-}

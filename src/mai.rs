@@ -25,9 +25,35 @@ impl Backend {
             _ => Err("backend must be whisper or mai".into()),
         }
     }
-    pub fn key(self) -> &'static str {
-        if self == Self::Mai { "mai" } else { "whisper" }
+    /// A root-level config choice. Cloud transcription is opt-in.
+    pub fn configured() -> Self {
+        std::fs::read_to_string(crate::models::config_file())
+            .map(|text| Self::from_config(&text))
+            .unwrap_or(Self::Whisper)
     }
+
+    fn from_config(text: &str) -> Self {
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') {
+                break; // Root options must precede TOML tables.
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim() == "backend" {
+                let value = value.split('#').next().unwrap_or("").trim();
+                let value = value
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')));
+                return value
+                    .and_then(|v| Self::parse(v).ok())
+                    .unwrap_or(Self::Whisper);
+            }
+        }
+        Self::Whisper
+    }
+
     pub fn model(self) -> String {
         if self == Self::Mai {
             MODEL.into()
@@ -199,6 +225,28 @@ fn parse_words(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backend_requires_explicit_root_config() {
+        for text in [
+            "",
+            "# backend = \"mai\"",
+            "backend = \"unknown\"",
+            "backend = mai",
+            "[openrouter]\nbackend = \"mai\"",
+            "[[action]]\nbackend = \"mai\"",
+        ] {
+            assert!(Backend::from_config(text) == Backend::Whisper);
+        }
+        for text in [
+            "backend = \"mai\"",
+            "backend = 'mai' # cloud\n[openrouter]",
+            "# comment\nbackend = \"mai\"\n[[action]]",
+        ] {
+            assert!(Backend::from_config(text) == Backend::Mai);
+        }
+        assert!(Backend::from_config("backend = \"whisper\"") == Backend::Whisper);
+    }
+
     #[test]
     fn pre_cancelled_work_does_not_start_the_adapter() {
         let (events, _) = async_channel::unbounded();

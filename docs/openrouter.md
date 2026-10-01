@@ -1,8 +1,16 @@
 # Optional MAI transcription
 
-Whisper remains the default. Choose **MAI (OpenRouter)** under Transcription before recording/importing, or in the finished meeting before transcribing again. MAI sends audio to OpenRouter and its Microsoft provider and incurs API charges. Speaker identification remains local. The player, speaker names, transcript editing and chapters use the same timeline as Whisper.
+Whisper remains the default. Select MAI once in `~/.config/omarchy-meeting-recorder/config.toml`, before any `[section]` or `[[action]]` tables:
 
-The CLI defaults to local Whisper regardless of the UI preference. It accepts `--backend mai` or `--backend whisper` on `transcribe` and `transcribe-file`. Example:
+```toml
+backend = "mai"
+```
+
+Use `backend = "whisper"` for local transcription. The app uses this choice for new recordings, imported audio and retranscription of existing meetings. There is no per-meeting backend selector. Editing the config takes effect on the next transcription; an existing transcript's model metadata does not override it.
+
+MAI sends audio to OpenRouter and its Microsoft provider and incurs API charges. Speaker identification remains local. Store the key as described below; it is not part of the model selection.
+
+The CLI uses the same config. Explicit `--backend mai` or `--backend whisper` overrides it on `transcribe` and `transcribe-file`. Example:
 
 ```sh
 omarchy-meeting-recorder transcribe-file recording.wav --backend mai --language no --speakers 1

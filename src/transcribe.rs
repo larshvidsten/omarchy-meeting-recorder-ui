@@ -1296,7 +1296,7 @@ pub fn to_markdown(title: &str, date: &str, transcript: &Transcript) -> String {
 pub fn cli(args: &[String]) -> glib::ExitCode {
     let mut files = Vec::new();
     let mut language = "auto".to_owned();
-    let mut backend = crate::mai::Backend::Whisper;
+    let mut backend = crate::mai::Backend::configured();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -1329,7 +1329,7 @@ pub fn cli(args: &[String]) -> glib::ExitCode {
 pub fn cli_file(args: &[String]) -> glib::ExitCode {
     let mut files = Vec::new();
     let mut language = "auto".to_owned();
-    let mut backend = crate::mai::Backend::Whisper;
+    let mut backend = crate::mai::Backend::configured();
     let mut speakers = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

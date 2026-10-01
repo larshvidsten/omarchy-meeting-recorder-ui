@@ -71,9 +71,14 @@ def main():
         old+='\n[[action]]\nname = "Summarize to Tana"\ncommand = \'python3 "$HOME/.local/share/meeting-recorder-mai/current/integrations/meeting-to-tana.py" "$1"\'\n'
     if 'openrouter' not in parsed:
         old+='\n[openrouter]\nphrases = ["Digel"]\n'
+    if 'backend' not in parsed:
+        backend = prefs.get('backend', 'mai')
+        if backend not in ('mai', 'whisper'): backend = 'whisper'
+        old = f'backend = "{backend}"\n\n' + old
     tomllib.loads(old)
     config.parent.mkdir(parents=True,exist_ok=True); config.write_text(old)
-    prefs.setdefault('backend','mai'); prefs.setdefault('language','auto')
+    prefs.pop('backend', None)
+    prefs.setdefault('language','auto')
     prefs.setdefault('your_name','Lars'); prefs['bar_widget_offered']='yes'
     settings.parent.mkdir(parents=True,exist_ok=True); settings.write_text(json.dumps(prefs))
     for command in (['update-desktop-database',str(desktop.parent)],['update-mime-database',str(mime.parent.parent)]):
